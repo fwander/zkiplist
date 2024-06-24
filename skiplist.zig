@@ -49,16 +49,20 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             }
         }
 
+        /// a Key Value pair. Will be used as Inner for BufWrap
         const KVPair = struct {
             key: K,
             val: V,
         };
 
+        /// Allows us to reinterp the data of a freed node
+        /// as a linked list
         const RmNode = struct {
             next: ?*RmNode,
             height: usize,
         };
 
+        /// skiplist node type. Is of variable size.
         const Node = bufwrap.BufWrap(KVPair, bufwrap.Self);
 
         head: std.ArrayList(?*Node),
@@ -68,6 +72,10 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
 
         const SL = @This();
 
+        /// pop a remoed node from the free list.
+        /// If not using the free list or the free
+        /// list is empty, will return null, otherwise
+        /// returns pointer to most recently freed node.
         fn pop_rm(self: *SL) ?*Node {
             if (!options.reuse_nodes) {
                 return null;
@@ -82,6 +90,10 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return null;
         }
 
+        /// Push a node to the free list, if not using
+        /// the free list, simply dealloc, otherwise
+        /// reinterp data and update self.last_rmd to
+        /// the pointer which was passed in
         fn push_rm(self: *SL, node: *Node) void {
             if (!options.reuse_nodes) {
                 node.deinit(self.allocator);
@@ -94,6 +106,9 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             self.last_rmd = as_rm;
         }
 
+        /// Returns a pointer to a new node, If using the free list,
+        /// will return pointer to most resently freed node,
+        /// otherwize will alloc a new node.
         fn new_node(self: *SL, allocator: std.mem.Allocator, key: K, val: V, height: usize) !*Node {
             var node: *Node = undefined;
             if (self.pop_rm()) |ret| {
@@ -109,6 +124,7 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return node;
         }
 
+        /// Initialize a SkipList, needs a allocator and a rng.
         pub fn init(allocator: mem.Allocator, rand: std.rand.Random) SL {
             return SL{
                 .head = std.ArrayList(?*Node).init(allocator),
@@ -118,6 +134,8 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             };
         }
 
+        /// returns next node height. Uses random number generator
+        /// which was passed in through init.
         fn next_height(self: *SL) usize {
             var ret: usize = 1;
             while (self.rand.boolean()) {
@@ -126,6 +144,9 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return ret;
         }
 
+        /// frees memory which was alloc'ed by self.
+        /// walks the lowest level of the skiplist to call
+        /// deinit on every node
         pub fn deinit(self: *SL) void {
             if (self.head.items.len != 0) {
                 var o_node = self.head.items[0];
@@ -138,6 +159,8 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             self.head.deinit();
         }
 
+        /// walks the skiplist to find target K node.
+        /// @param target key to get
         fn get_node(self: *SL, target: K) ?*Node {
             var iter = WalkIter.fst(self.*, target);
 
@@ -145,6 +168,7 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
                 return null;
             }
 
+            // walk self head before walking the rest of the tree
             var i = self.head.items.len - 1;
             while (true) : (i -= 1) {
                 const node = self.head.items[i];
@@ -161,6 +185,9 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
 
             while (iter) |curr| {
                 if (curr.right()) |next| {
+                    // check if the node directly to our right is
+                    // who wer're looking for because iter won't
+                    // ever reach that node.
                     if (SL.eq(next, target)) {
                         return next;
                     }
@@ -170,6 +197,8 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return null;
         }
 
+        /// get the value from a key
+        /// @param key key to get
         fn get(self: *SL, key: K) ?V {
             const o_got = self.get_node(key);
             if (o_got) |got| {
@@ -178,6 +207,10 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return null;
         }
 
+        /// set the value for a key
+        /// will overide if key is present, otherwise will insert
+        /// @param key key to set
+        /// @param val val to set
         fn set(self: *SL, key: K, val: V) !void {
             var o_got = self.get_node(key);
             if (o_got) |got| {
@@ -187,11 +220,16 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             return self.add(key, val);
         }
 
+        /// add a new key value pair. If key was present will
+        /// break struct invariants.
+        /// @param key key to add
+        /// @param val val to add
         fn add(self: *SL, key: K, val: V) !void {
             var node = try self.new_node(self.allocator, key, val, self.next_height());
 
             var iter = WalkIter.fst(self.*, key);
 
+            // grow head arraylist to accommodate new node
             if (node.get_buf().len > self.head.items.len) {
                 try self.head.appendNTimes(
                     null,
@@ -199,8 +237,12 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
                 );
             }
 
+            // walk head to update head pointers
             var i = node.get_buf().len - 1;
             while (true) : (i -= 1) {
+                // as soon as a node in the head list is smaller than
+                // key, we know that it and all subsiquent nodes will
+                // shadow new node.
                 if (SL.less_than(self.head.items[i], key)) {
                     break;
                 }
@@ -215,6 +257,8 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             while (iter) |curr| {
                 iter = curr.next(key);
                 if (curr.height <= node.get_buf().len - 1) {
+                    // make sure that new node would fall in between
+                    // curr.right and curr.
                     if (SL.greater_than(curr.right(), key)) {
                         node.get_buf()[curr.height] = curr.right();
                         curr.node.get_buf()[curr.height] = node;
@@ -232,7 +276,7 @@ pub fn SkipList(comptime K: type, comptime V: type, comptime options: Options) t
             var removing: ?*Node = null;
 
             if (self.head.items.len == 0) {
-                return;
+                return false;
             }
 
             var i = self.head.items.len - 1;
@@ -352,7 +396,7 @@ pub fn main() !void {
         const key = @mod(r.int(i32), 100000);
         const val = @mod(r.int(i32), 100000);
         if (r.int(i32) & 1 != 0) {
-            list.remove(key);
+            _ = list.remove(key);
             //_ = gld_list.remove(key);
         } else {
             try list.set(key, val);

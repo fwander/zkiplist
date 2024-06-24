@@ -1,3 +1,5 @@
+/// compare two elements of the same type.
+/// Pointers are followed.
 pub fn eq(a: anytype, b: @TypeOf(a)) bool {
     const T = @TypeOf(a);
 
